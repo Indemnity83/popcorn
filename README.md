@@ -6,6 +6,8 @@ Popcorn serves a static **503 maintenance page** through Caddy while Nginx is st
 
 It's a single ~300-line bash script. Please read it before you run it.
 
+![Popcorn taking a Forge server's sites offline: check, stop Nginx, start, then curl returns 503](docs/demo.gif)
+
 ## Install
 
 ```bash
