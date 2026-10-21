@@ -76,6 +76,7 @@ Check the public sites again. `popcorn.service` and stock `caddy.service` are se
 - Intended for standard Ubuntu Forge configurations using `/etc/nginx/sites-enabled` and ports 80/443. Review the discovered sites; unsupported or ambiguous configurations are refused.
 - Leading-dot Forge names such as `.example.com` are handled automatically using the base domain and matching concrete names in the configured certificate. Certificate wildcards are not enumerated into arbitrary subdomains.
 - Certificates must cover configured HTTPS names, match their keys, and have at least 24 hours remaining. HTTP-only sites stay HTTP-only. Certificates are copied, not renewed.
+- A certificate issue affects only its site: expired or unusable certificates mean HTTP only, clearly listed in dry-run. Valid certificates with less than 24 hours remaining warn without blocking deployment. HTTPS requires a matching, valid certificate; repair it and redeploy to restore HTTPS. Certificates are copied, not renewed.
 - Known hosts get 503; unknown HTTP hosts get 404. Unknown HTTPS requests get 404 if TLS completes, or fail the handshake without a matching certificate.
 - Popcorn is **not enabled at boot**. Existing Nginx/Caddy boot settings still apply after a reboot.
 - Caddy installation uses configured APT repositories and leaves its newly installed stock service disabled. Original Nginx/Caddy configurations and certificates are not edited.

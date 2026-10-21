@@ -103,7 +103,7 @@ Usage: sudo bash popcorn.sh COMMAND [OPTIONS]
       Leaves Caddy installed, the script itself and shared journal history intact.
 
 Defaults: /etc/nginx/sites-enabled, Nginx include prefix /etc/nginx,
-minimum certificate validity 86400 seconds. ASCII concrete DNS names only.
+certificate expiry warning threshold 86400 seconds. ASCII concrete DNS names only.
 This utility never stops, starts or reloads Nginx/PHP/stock Caddy.
 install disables boot enablement of the newly installed stock Caddy service.
 Maintenance is started for this boot only; no services are enabled at boot.
@@ -120,8 +120,9 @@ Safety and discovery:
   DNS names from their configured certificate. Wildcards are not enumerated.
   Optional: --expand-name .domain=host1,host2 overrides that automatic list.
   Other regex/wildcard/variable server names, private/nonstandard listeners,
-  inherited/multiple certificate pairs, encrypted keys and conflicting TLS
-  mappings are refused. Wildcard certificates for explicit names are supported.
+  inherited/multiple certificate pairs and conflicting TLS mappings are refused.
+  Expired/unusable certificates disable HTTPS for that site; HTTP remains.
+  Valid certificates nearing expiry warn without blocking other sites. Wildcard certificates for explicit names are supported.
   Private-CA/self-signed chains require prior trust in the system trust store.
   APT install uses configured repositories, no apt update or requested upgrades.
   It refuses an existing Caddy config/unit without a working /usr/bin/caddy.
@@ -524,7 +525,8 @@ activate() {
     cat "$logfile" >&2
     TRANSACTION=0
     log ''
-    log '🍿 Your application sites are offline and the maintenance pages are up. Go get your popcorn!'
+    log '🍿 Maintenance pages are up for the sites/endpoints listed above. Go get your popcorn!'
+    discovery limitations "$release/inventory.json" >&2
     log ''
     log "When you're ready to return, choose one:"
     log 'Stop Popcorn and keep its files for reuse:'
@@ -678,12 +680,16 @@ def certificate(cert, key, hosts, minimum):
         raise Invalid(f'SAN DNS names required: {cert}')
     dates = dict(re.findall(r'(notBefore|notAfter)=(.*)', data))
     now = dt.datetime.now(dt.timezone.utc)
+    warning = None
     for name in ('notBefore', 'notAfter'):
         parsed = dt.datetime.strptime(dates[name], '%b %d %H:%M:%S %Y %Z').replace(tzinfo=dt.timezone.utc)
         if name == 'notBefore' and parsed > now:
             raise Invalid(f'Certificate is not yet valid: {cert}')
-        if name == 'notAfter' and parsed < now + dt.timedelta(seconds=minimum):
-            raise Invalid(f'Certificate expires within {minimum} seconds: {cert}')
+        if name == 'notAfter':
+            if parsed <= now:
+                raise Invalid(f'Certificate has expired: {cert}')
+            if parsed < now + dt.timedelta(seconds=minimum):
+                warning = f'Certificate expires within {minimum} seconds: {cert}'
     public_cert = run('openssl', 'x509', '-in', cert, '-pubkey', '-noout')
     public_key = run('openssl', 'pkey', '-in', key, '-passin', 'pass:', '-pubout')
     if public_cert != public_key:
@@ -694,6 +700,7 @@ def certificate(cert, key, hosts, minimum):
         # Some OpenSSL versions return success even when the name does not match.
         if checked.returncode or 'does match certificate' not in checked.stdout.decode():
             raise Invalid(f'Certificate does not cover {host}: {cert}')
+    return warning
 
 
 def certificate_dns_names(cert):
@@ -766,6 +773,7 @@ def inventory(enabled, prefix, minimum, expanded=None):
                     raise Invalid(f'Exactly one explicit certificate/key pair required in {origin}; no inherited or multi-cert TLS')
                 pair = (certs[0][0], keys[0][0])
             hosts = []
+            tls_error = None
             automatic_patterns = []
             for raw in raw_names:
                 value = raw.lower()
@@ -782,7 +790,12 @@ def inventory(enabled, prefix, minimum, expanded=None):
                         automatic_patterns.append(value)
                         hosts.append(base)
                         if pair:
-                            for san in certificate_dns_names(pair[0]):
+                            try:
+                                sans = certificate_dns_names(pair[0])
+                            except (Invalid, OSError, ValueError) as exc:
+                                sans = []
+                                tls_error = str(exc)
+                            for san in sans:
                                 if '*' not in san and (san == base or san.endswith(value)):
                                     host = hostname(san)
                                     if host:
@@ -800,10 +813,18 @@ def inventory(enabled, prefix, minimum, expanded=None):
                 notes.append(f'Ignored unnamed/default {"TLS" if tls else "HTTP"} block in {origin}; no fallback certificate imported')
                 continue
             if tls:
-                certificate(*pair, hosts, minimum)
+                try:
+                    warning = certificate(*pair, hosts, minimum)
+                    if warning:
+                        notes.append(f'Warning for {", ".join(hosts)}: {warning}')
+                except (Invalid, OSError, ValueError) as exc:
+                    tls_error = str(exc)
+                if tls_error:
+                    notes.append(f'HTTPS unavailable for {", ".join(hosts)}: {tls_error}')
+                    pair = None
             if vals(body, 'ssl'):
                 raise Invalid(f'Legacy ssl directive unsupported in {origin}')
-            entries.append(dict(source=str(source), origin=origin, hosts=hosts, pair=pair, automatic_patterns=automatic_patterns))
+            entries.append(dict(source=str(source), origin=origin, hosts=hosts, pair=pair, automatic_patterns=automatic_patterns, tls_error=tls_error))
     unused = set(expanded) - used
     if unused:
         raise Invalid(f'Unused --expand-name mapping(s): {", ".join(sorted(unused))}; check discovery scope/spelling')
@@ -821,16 +842,19 @@ def inventory(enabled, prefix, minimum, expanded=None):
         for host in e['hosts']:
             if host in mapping and mapping[host]['pair'] and e['pair'] and mapping[host]['pair'] != e['pair']:
                 raise Invalid(f'Conflicting HTTPS certificate mappings for {host}')
-            if host not in mapping or e['pair']:
+            if host not in mapping or e['pair'] or (not mapping[host]['pair'] and e['tls_error']):
                 mapping[host] = e
     if not mapping:
         raise Invalid('No explicit DNS hosts discovered')
     groups = {}
     for host, e in sorted(mapping.items()):
-        group = (e['source'], tuple(e['pair']) if e['pair'] else None)
+        group = (e['source'], tuple(e['pair']) if e['pair'] else None, e['tls_error'])
         groups.setdefault(group, []).append(host)
     sites = [dict(source=source, hosts=hosts, certificate=pair[0] if pair else None,
-                  key=pair[1] if pair else None) for (source, pair), hosts in groups.items()]
+                  key=pair[1] if pair else None, https_error=error) for (source, pair, error), hosts in groups.items()]
+    for site in sites:
+        if site['https_error']:
+            notes.append(f"HTTPS unavailable for {', '.join(site['hosts'])}: {site['https_error']}")
     return dict(sites=sites, notes=notes, sources=sorted(parser.sources),
                 policy='Known hosts: 503 on HTTP and configured HTTPS; unknown HTTP: 404; no default TLS certificate; unmatched HTTPS requests: 404')
 
@@ -848,7 +872,8 @@ def summary(plan):
     print('Found the following available sites:')
     for site in plan['sites']:
         for host in site['hosts']:
-            status = 'has certificate' if site['certificate'] else 'HTTP only (no certificate)'
+            status = ('has certificate' if site['certificate'] else
+                      'HTTP only - HTTPS unavailable' if site.get('https_error') else 'HTTP only (no certificate)')
             print(f'  {host} - {status}')
     for note in plan['notes']:
         if not note.startswith('Ignored unnamed/default'):
@@ -916,6 +941,8 @@ def main():
     d.add_argument('--prefix', default='/etc/nginx')
     d.add_argument('--minimum-valid-seconds', type=int, default=86400)
     d.add_argument('--expand-name', action='append', default=[], metavar='.DOMAIN=HOST1,HOST2')
+    limited = sub.add_parser('limitations')
+    limited.add_argument('plan')
     h = sub.add_parser('summary')
     h.add_argument('plan')
     b = sub.add_parser('build')
@@ -935,7 +962,11 @@ def main():
         print(json.dumps(plan, indent=2))
     else:
         plan = json.loads(Path(a.plan).read_text())
-        if a.cmd == 'summary':
+        if a.cmd == 'limitations':
+            for site in plan['sites']:
+                if site.get('https_error'):
+                    print(f"HTTPS unavailable: {', '.join(site['hosts'])}. HTTP only until the certificate/key is repaired and Popcorn redeployed.")
+        elif a.cmd == 'summary':
             summary(plan)
         elif a.cmd == 'build':
             build(plan, a.target)
@@ -946,8 +977,10 @@ def main():
             root = Path(a.plan).parent
             for i, site in enumerate(plan['sites'], 1):
                 if site['certificate']:
-                    certificate(str(root / 'certs' / f'{i}.crt'), str(root / 'certs' / f'{i}.key'),
-                                site['hosts'], plan['minimum_valid_seconds'])
+                    warning = certificate(str(root / 'certs' / f'{i}.crt'), str(root / 'certs' / f'{i}.key'),
+                                          site['hosts'], plan['minimum_valid_seconds'])
+                    if warning:
+                        print(f'Warning: {warning}', file=sys.stderr)
 
 
 if __name__ == '__main__':
