@@ -1,6 +1,6 @@
 # Popcorn 🍿
 
-Take your Laravel Forge sites offline and wait for the dust to settle.
+Take your Laravel Forge (or other Nginx + PHP) sites offline and wait for the dust to settle.
 
 Popcorn serves a static **503 maintenance page** through Caddy while Nginx is stopped, so you can patch PHP without visitors hitting a half-upgraded app. It reuses the certificates your Nginx config already points to, so HTTPS keeps working.
 
@@ -56,6 +56,12 @@ sudo systemctl start nginx
 ```
 
 `sudo popcorn status` repeats the hostname checks at any time. Logs: `sudo journalctl -u popcorn -n 50 --no-pager`
+
+## Where it works
+
+Built for Laravel Forge, and also tested on Ubuntu 24.04 and Debian 12 servers running Nginx and PHP-FPM with Certbot certificates. In general it needs root, systemd, Nginx installed on the host, and certificate files on disk.
+
+It's **not** for Apache, cPanel or Plesk (their service monitors may restart the web server), Nginx running in Docker, or shared hosting.
 
 ## How it works
 
