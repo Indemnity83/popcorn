@@ -2,85 +2,77 @@
 
 Take your Laravel Forge sites offline and wait for the dust to settle.
 
-Popcorn serves static HTTP/HTTPS **503 maintenance pages** through Caddy while Nginx is stopped. The server stays running and accessible over SSH. It discovers enabled sites and reuses their existing certificates—no PHP required to serve the page.
+Popcorn serves a static **503 maintenance page** through Caddy while Nginx is stopped, so you can patch PHP without visitors hitting a half-upgraded app. It reuses the certificates your Nginx config already points to, so HTTPS keeps working.
 
-## Start here
+It's a single ~300-line bash script. Please read it before you run it.
 
-Save `popcorn.sh` on an Ubuntu Forge server and run:
-
-```bash
-sudo bash popcorn.sh dry-run
-```
-
-It lists sites, checks certificates, and reports the next steps: missing Caddy, running Nginx, occupied ports, or configuration problems. **Dry-run changes no services or persistent configuration.** No companion files or installation directory are needed; Python 3 must be installed.
-
-## Go offline
-
-Follow the dry-run's guidance. If Caddy is missing:
+## Install
 
 ```bash
-sudo bash popcorn.sh install
+sudo curl -fsSL https://github.com/Indemnity83/popcorn/releases/latest/download/popcorn.sh -o /usr/local/bin/popcorn && sudo chmod +x /usr/local/bin/popcorn
 ```
 
-When ready, stop Nginx and deploy the maintenance pages:
+Run the same command again to update. To review before running anything, read it with `less /usr/local/bin/popcorn`. To pin a version, replace `latest/download` with `download/v2.0.0`. With wget, use `sudo wget -qO /usr/local/bin/popcorn URL`.
+
+## Quick start
+
+Paste this into your Forge server over SSH. It installs Popcorn, installs Caddy if it's missing, stops Nginx and starts Popcorn. If Popcorn can't start, it starts Nginx again.
 
 ```bash
-sudo systemctl stop nginx.service
-sudo bash popcorn.sh deploy
-sudo bash popcorn.sh verify
+sudo curl -fsSL https://github.com/Indemnity83/popcorn/releases/latest/download/popcorn.sh -o /usr/local/bin/popcorn && sudo chmod +x /usr/local/bin/popcorn && sudo popcorn install && sudo systemctl stop nginx && { sudo popcorn start || sudo systemctl is-active -q popcorn || sudo systemctl start nginx; }
 ```
 
-Popcorn never stops Nginx, PHP-FPM, or workers itself. Manage PHP and application workers separately if the incident requires it. If ports are occupied, deployment stops without stopping the existing service. Successful deployment checks the configuration and each HTTP/HTTPS endpoint.
-
-Check a normal public site URL from another machine too. Expect **503**, `Retry-After: 600`, and `Cache-Control: no-store`. For troubleshooting:
+When PHP is patched, bring the sites back. This checks the Nginx config before stopping Popcorn:
 
 ```bash
-sudo journalctl -u popcorn.service -n 50 --no-pager
+sudo nginx -t && sudo popcorn stop && sudo systemctl start nginx
 ```
 
-Routine validation output is saved under `/etc/popcorn/logs/`. Deployment waits for validation to finish; failures show their error details.
+**From the Forge dashboard:** commands run there as `forge`, and `sudo` needs a password. Run the same two lines without `sudo` in a Forge Recipe that runs as `root`.
 
-## Bring sites back
-
-Finish and verify the updates, restore any PHP-FPM services that were stopped, and check Nginx configuration while Popcorn is still running:
+## Step by step
 
 ```bash
-sudo nginx -t
+sudo popcorn check       # lists the sites it found and what's left to do; changes nothing
+sudo popcorn install     # only if check says Caddy is missing
+sudo systemctl stop nginx
+sudo popcorn start       # serves the page, then checks every hostname answers 503
 ```
 
-Once ready, `stop` ends the holding pages and keeps Popcorn's files and backups for reuse:
+Also check from another machine. You should get **503** with `Retry-After: 600` and `Cache-Control: no-store`:
 
 ```bash
-sudo bash popcorn.sh stop
+curl -sI https://example.com/
 ```
 
-`teardown` stops Popcorn and removes its generated files and backups. It can run directly or after `stop`:
+When PHP is patched (and any PHP-FPM services you stopped are running again):
 
 ```bash
-sudo bash popcorn.sh teardown --dry-run
-sudo bash popcorn.sh teardown
+sudo nginx -t                    # make sure Nginx will start before taking the page down
+sudo popcorn stop                # stops Caddy and deletes everything Popcorn generated
+sudo systemctl start nginx
 ```
 
-**Teardown deletes all Popcorn releases, copied keys, and backups.** It leaves Caddy installed and original Forge/Nginx files untouched.
+`sudo popcorn status` repeats the hostname checks at any time. Logs: `sudo journalctl -u popcorn -n 50 --no-pager`
 
-Neither option starts Nginx. After maintenance stops and the web ports are free:
+## How it works
 
-```bash
-sudo nginx -t && sudo systemctl start nginx.service
-```
-
-Check the public sites again. `popcorn.service` and stock `caddy.service` are separate; if stock Caddy was also used for maintenance, stop/disable it before starting Nginx.
+- `nginx -T` prints the full Nginx config with every include resolved, and works with Nginx stopped. Popcorn collects each `ssl_certificate` / `ssl_certificate_key` pair from it.
+- Each certificate must be unexpired and match its key. HTTPS hostnames come from the certificate itself, so every name served over HTTPS is covered by its certificate. An unusable certificate is skipped (and listed by `check`); those hostnames get the HTTP page only.
+- Port 80 answers every hostname.
+- The Caddy config and certificate copies live in `/run/popcorn`, which is cleared on reboot. Caddy runs as the `caddy` user in a transient `popcorn.service` that is never enabled at boot, so a reboot brings your normal Nginx setup back.
+- Popcorn never edits Nginx config, and never starts or stops Nginx, PHP-FPM or queue workers.
 
 ## Worth knowing
 
-- Intended for standard Ubuntu Forge configurations using `/etc/nginx/sites-enabled` and ports 80/443. Review the discovered sites; unsupported or ambiguous configurations are refused.
-- Leading-dot Forge names such as `.example.com` are handled automatically using the base domain and matching concrete names in the configured certificate. Certificate wildcards are not enumerated into arbitrary subdomains.
-- Certificates must cover configured HTTPS names, match their keys, and have at least 24 hours remaining. HTTP-only sites stay HTTP-only. Certificates are copied, not renewed.
-- A certificate issue affects only its site: expired or unusable certificates mean HTTP only, clearly listed in dry-run. Valid certificates with less than 24 hours remaining warn without blocking deployment. HTTPS requires a matching, valid certificate; repair it and redeploy to restore HTTPS. Certificates are copied, not renewed.
-- Known hosts get 503; unknown HTTP hosts get 404. Unknown HTTPS requests get 404 if TLS completes, or fail the handshake without a matching certificate.
-- Popcorn is **not enabled at boot**. Existing Nginx/Caddy boot settings still apply after a reboot.
-- Caddy installation uses configured APT repositories and leaves its newly installed stock service disabled. Original Nginx/Caddy configurations and certificates are not edited.
-- Releases and key-bearing backups live under `/etc/popcorn/`. To restore a previous maintenance release, run `status`, then `rollback RELEASE_ID`.
-- Discovery, deployment, stop, and teardown have been exercised on an Ubuntu Forge server with Caddy already installed. Run dry-run and verification on each server.
+- **Certificate renewals aren't picked up while Popcorn runs.** Run `stop` then `start`.
+- **Wildcard certificates** are served as wildcards, but `start` and `status` can only check concrete hostnames. A hostname no certificate covers fails the TLS handshake.
+- **Installing Caddy** uses your configured apt repos. If your Ubuntu release doesn't package it, add [Caddy's repo](https://caddyserver.com/docs/install#debian-ubuntu-raspbian) first. The stock `caddy.service` is kept from starting and left disabled.
 
-Run `sudo bash popcorn.sh --help` for commands, discovery options, and recovery details.
+## Upgrading
+
+Run the install command again. That's safe while Popcorn is running: the new version takes effect when you `stop` and then `start`. `popcorn version` prints the installed version, and `status` shows the version that's actually running.
+
+**From v1** (the original ~1,100-line `popcorn.sh`; `version` gives an error): install as above and run `sudo popcorn start`, even while v1 is serving. Once the new config validates, Popcorn removes v1 as its `teardown` did (its unit and `/etc/popcorn`, including key copies and backups) and starts. Sites are unreachable for a second or two. Nothing is deleted unless v1's ownership markers are present.
+
+Found a Forge setup it doesn't handle? [Open an issue](https://github.com/Indemnity83/popcorn/issues).

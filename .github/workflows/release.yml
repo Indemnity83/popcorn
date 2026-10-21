@@ -1,0 +1,18 @@
+name: release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: shellcheck popcorn.sh
+      - name: Tag must match VERSION in popcorn.sh
+        run: grep -qx "VERSION=${GITHUB_REF_NAME#v} .*" popcorn.sh
+      - name: Publish popcorn.sh as the release asset
+        run: gh release create "$GITHUB_REF_NAME" popcorn.sh --title "Popcorn ${GITHUB_REF_NAME#v}" --notes "See [CHANGELOG.md](https://github.com/$GITHUB_REPOSITORY/blob/$GITHUB_REF_NAME/CHANGELOG.md)."
+        env:
+          GH_TOKEN: ${{ github.token }}
