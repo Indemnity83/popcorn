@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT · Copyright (c) 2026 Kyle Klaus · https://github.com/Indemnity83/popcorn
 # Popcorn 🍿 — put a 503 maintenance page in front of every site on a Laravel
 # Forge server while Nginx is stopped, using Caddy and the certificates Nginx
 # is already configured with. Then wait for the dust to settle.
@@ -27,7 +28,7 @@ set -f # no globbing: certificate names like *.example.com must stay literal
 export PATH=/usr/sbin:/usr/bin:/sbin:/bin LC_ALL=C
 umask 077
 
-VERSION=2.0.0 # must match the release tag; v1 was the original ~1,100-line script
+VERSION=2.0.1 # must match the release tag; v1 was the original ~1,100-line script
 DIR=/run/popcorn
 UNIT=popcorn.service
 SITES=() # one entry per usable certificate: "cert key host1 host2 ..."
@@ -308,7 +309,7 @@ install_caddy() {
 case ${1:-} in
     check | install | start | status | stop) ;;
     version | --version) echo "popcorn $VERSION"; exit 0 ;;
-    *) echo "popcorn $VERSION"; sed -n '2,/^$/s/^# \{0,1\}//p' "$0"; exit 0 ;;
+    *) echo "popcorn $VERSION"; sed -n '3,/^$/s/^# \{0,1\}//p' "$0"; exit 0 ;;
 esac
 [[ $EUID == 0 ]] || die 'Run with sudo.'
 for cmd in nginx openssl curl ss systemctl systemd-run runuser; do

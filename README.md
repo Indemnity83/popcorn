@@ -14,7 +14,7 @@ It's a single ~300-line bash script. Please read it before you run it.
 sudo curl -fsSL https://github.com/Indemnity83/popcorn/releases/latest/download/popcorn.sh -o /usr/local/bin/popcorn && sudo chmod +x /usr/local/bin/popcorn
 ```
 
-Run the same command again to update. To review before running anything, read it with `less /usr/local/bin/popcorn`. To pin a version, replace `latest/download` with `download/v2.0.0`. With wget, use `sudo wget -qO /usr/local/bin/popcorn URL`.
+Run the same command again to update. To review before running anything, read it with `less /usr/local/bin/popcorn`. To pin a version, replace `latest/download` with `download/v2.0.1`. With wget, use `sudo wget -qO /usr/local/bin/popcorn URL`.
 
 ## Quick start
 
@@ -84,3 +84,7 @@ Run the install command again. That's safe while Popcorn is running: the new ver
 **From v1** (the original ~1,100-line `popcorn.sh`; `version` gives an error): install as above and run `sudo popcorn start`, even while v1 is serving. Once the new config validates, Popcorn removes v1 as its `teardown` did (its unit and `/etc/popcorn`, including key copies and backups) and starts. Sites are unreachable for a second or two. Nothing is deleted unless v1's ownership markers are present.
 
 Found a Forge setup it doesn't handle? [Open an issue](https://github.com/Indemnity83/popcorn/issues).
+
+## License
+
+[MIT](LICENSE). Use it, adapt it, build it into your own tools.

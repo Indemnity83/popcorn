@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.0.1 — 2026-10-21
+
+- MIT licensed. The script carries an SPDX license header, so the license travels with the downloaded file.
+- README: where Popcorn works beyond Forge (tested on Ubuntu 24.04 and Debian 12 with Certbot), and a demo GIF.
+
 ## 2.0.0 — 2026-10-21
 
 Rewritten from scratch: ~300 lines of bash instead of ~1,100 lines of bash and embedded Python.
